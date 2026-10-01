@@ -11,213 +11,191 @@ on:
 jobs:
   build:
     name: Development build
-    runs-on: macos-14
-    timeout-minutes: 45
-
-    env:
-      IOS_DEPLOYMENT_TARGET: "14.0"
-      BUILD_JOBS: "3"
-
+    runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           submodules: recursive
 
-      - name: Select compatible Xcode
-        shell: bash
+      - name: Select latest Xcode
         run: |
-          set -Eeuo pipefail
-
-          XCODE_APP="$(find /Applications -maxdepth 1 \
-            -type d \
-            -name 'Xcode_16*.app' \
-            -print \
-            | sort -V \
-            | tail -n 1)"
-
-          if [ -z "$XCODE_APP" ]; then
-            echo "No compatible Xcode 16 installation was found."
-            echo "Installed Xcode versions:"
-            find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -V
-            exit 1
+          LATEST_XCODE=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$LATEST_XCODE" ]; then
+            echo "Using $LATEST_XCODE"
+            sudo xcode-select -s "$LATEST_XCODE"
           fi
-
-          echo "Using $XCODE_APP"
-          sudo xcode-select -s "$XCODE_APP/Contents/Developer"
-
-          xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-path
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Setup JDK 8
+      - name: Setup JDK 8 (Zulu)
         uses: actions/setup-java@v5
         id: setup-java
         with:
-          distribution: zulu
+          distribution: 'zulu'
           java-version: '8'
+
+      - name: Setup JDK 25 (Zulu)
+        uses: actions/setup-java@v5
+        id: setup-java25
+        with:
+          distribution: 'zulu'
+          java-version: '25'
 
       - name: Install brew dependencies
         env:
           HOMEBREW_NO_REQUIRE_TAP_TRUST: 1
         run: |
-          set -Eeuo pipefail
           brew update
-          brew install make wget ldid cmake
-
+          brew install make wget ldid cmake unzip
           sudo mkdir -p /usr/local/bin
-          sudo ln -sf "$(brew --prefix make)/bin/gmake" /usr/local/bin/gmake
+          sudo ln -sf /opt/homebrew/bin/gmake /usr/local/bin/gmake
 
-      - name: Resolve build environment
-        shell: bash
+      - name: Resolve env
         run: |
-          set -Eeuo pipefail
-
-          SDKPATH="$(xcrun --sdk iphoneos --show-sdk-path)"
-
-          {
-            echo "SDKPATH=$SDKPATH"
-            echo "RUNNER=0"
-            echo "IPHONEOS_DEPLOYMENT_TARGET=${IOS_DEPLOYMENT_TARGET}"
-            echo "MACOSX_DEPLOYMENT_TARGET=${IOS_DEPLOYMENT_TARGET}"
-            echo "CMAKE_OSX_DEPLOYMENT_TARGET=${IOS_DEPLOYMENT_TARGET}"
-          } >> "$GITHUB_ENV"
+          echo "SDKPATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
+          echo "RUNNER=0" >> $GITHUB_ENV
 
       - name: Verify tools
         run: |
-          set -Eeuo pipefail
-          xcodebuild -version
           gmake --version | head -1
           cmake --version | head -1
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Download and build libSDL3
-        shell: bash
+      - name: Download & build libSDL3 from source
         run: |
-          set -Eeuo pipefail
-
           SDL3_VERSION="release-3.4.0"
           SDL3_DIR="lwjgl-lib/amethyst-prebuilt-libraries-master/SDL/SDL3"
 
+          # Download vanilla SDL3 source
           rm -rf "$SDL3_DIR"
-          wget -q \
-            "https://github.com/libsdl-org/SDL/archive/refs/tags/${SDL3_VERSION}.tar.gz" \
-            -O /tmp/sdl3.tar.gz
-
+          wget -q "https://github.com/libsdl-org/SDL/archive/refs/tags/${SDL3_VERSION}.tar.gz" -O /tmp/sdl3.tar.gz
           mkdir -p "$SDL3_DIR"
-          tar xzf /tmp/sdl3.tar.gz \
-            --strip-components=1 \
-            -C "$SDL3_DIR"
+          tar xzf /tmp/sdl3.tar.gz --strip-components=1 -C "$SDL3_DIR"
+          rm /tmp/sdl3.tar.gz
 
-          rm -f /tmp/sdl3.tar.gz
+          # Apply Amethyst patches (hitTest, embed, input bridge registration, etc.)
+          git -C "$SDL3_DIR" apply --stat "$GITHUB_WORKSPACE/patches/sdl3-amethyst.patch"
+          git -C "$SDL3_DIR" apply "$GITHUB_WORKSPACE/patches/sdl3-amethyst.patch"
 
-          git -C "$SDL3_DIR" apply --stat \
-            "$GITHUB_WORKSPACE/patches/sdl3-amethyst.patch"
-
-          git -C "$SDL3_DIR" apply \
-            "$GITHUB_WORKSPACE/patches/sdl3-amethyst.patch"
-
-          cmake -S "$SDL3_DIR" -B "$SDL3_DIR/build-ios" \
+          # Build for iOS
+          cd "$SDL3_DIR"
+          mkdir -p build-ios && cd build-ios
+          cmake .. \
             -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT="$SDKPATH" \
-            -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
+            -DCMAKE_OSX_SYSROOT="$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -DCMAKE_OSX_ARCHITECTURES="arm64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
             -DSDL_VULKAN=ON \
             -DSDL_METAL=ON \
             -DSDL_SHARED=ON \
             -DSDL_STATIC=OFF
+          cmake --build . -j$(sysctl -n hw.ncpu)
+          echo "libSDL3 built successfully"
+          ls -la libSDL3*.dylib
 
-          cmake --build "$SDL3_DIR/build-ios" \
-            --parallel "$BUILD_JOBS"
-
-          ls -la "$SDL3_DIR/build-ios"/libSDL3*.dylib
-
-      - name: Install libSDL3
+      - name: Install libSDL3 into resources
         run: |
-          set -Eeuo pipefail
+          cp lwjgl-lib/amethyst-prebuilt-libraries-master/SDL/SDL3/build-ios/libSDL3.0.dylib \
+             Natives/resources/Frameworks/libSDL3.dylib
+          echo "libSDL3.dylib installed"
 
-          cp \
-            lwjgl-lib/amethyst-prebuilt-libraries-master/SDL/SDL3/build-ios/libSDL3.0.dylib \
-            Natives/resources/Frameworks/libSDL3.dylib
-
-      - name: Build IPA packages
+      - name: Build sideload IPA & TrollStore tIPA
         shell: bash
         run: |
-          set -Eeuo pipefail
+          echo '#import <mach/mach.h>' | cat - Natives/JavaLauncher.m > temp && mv temp Natives/JavaLauncher.m
 
-          echo '#import <mach/mach.h>' \
-            | cat - Natives/JavaLauncher.m > Natives/JavaLauncher.m.tmp
+          JDK8_PATH="${{ steps.setup-java.outputs.path }}"
+          JDK25_PATH="${{ steps.setup-java25.outputs.path }}"
 
-          mv Natives/JavaLauncher.m.tmp Natives/JavaLauncher.m
+          export PATH="$JDK25_PATH/bin:$JDK8_PATH/bin:/opt/homebrew/bin:$PATH"
+          export JAVA_HOME="$JDK25_PATH"
+          export BOOTJDK="$JDK8_PATH/bin"
 
-          JDK_BASE_PATH="${{ steps.setup-java.outputs.path }}"
-
-          export PATH="$JDK_BASE_PATH/bin:/opt/homebrew/bin:$PATH"
-          export JAVA_HOME="$JDK_BASE_PATH"
-          export BOOTJDK="$JDK_BASE_PATH/bin"
           export SLIMMED=1
-
-          export SDKROOT="$SDKPATH"
-          export IPHONEOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET"
-          export MACOSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET"
 
           export CODE_SIGNING_ALLOWED=NO
           export CODE_SIGNING_REQUIRED=NO
           export CODE_SIGN_IDENTITY=""
 
-          export CFLAGS="-Wno-error=implicit-function-declaration ${CFLAGS:-}"
-          export CXXFLAGS="-Wno-error=implicit-function-declaration ${CXXFLAGS:-}"
+          export CFLAGS="-Wno-error=implicit-function-declaration $CFLAGS"
+          export CXXFLAGS="-Wno-error=implicit-function-declaration $CXXFLAGS"
 
-          mkdir -p \
-            lwjgl-lib/3.3.3-lwgjl/modules/lwjgl/lwjglx/src/generated/java \
-            lwjgl-lib/3.4.1-lwgjl/modules/lwjgl/lwjglx/src/generated/java
+          SIGN_FLAGS="CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="
 
-          # Build one target at a time so the native/JRE failure is not hidden
-          # by concurrent dsym/package jobs.
-          gmake -j"$BUILD_JOBS" jre \
-            PLATFORM=2 \
-            RUNNER=0 \
-            SDKPATH="$SDKPATH" \
-            IOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            2>&1 | tee build-jre.log
+          mkdir -p lwjgl-lib/3.3.3-lwgjl/modules/lwjgl/lwjglx/src/generated/java
+          mkdir -p lwjgl-lib/3.4.1-lwgjl/modules/lwjgl/lwjglx/src/generated/java
 
-          gmake -j"$BUILD_JOBS" dsym package \
-            PLATFORM=2 \
-            RUNNER=0 \
-            SDKPATH="$SDKPATH" \
-            IOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            2>&1 | tee build-normal.log
+          echo "JAVA_HOME=$JAVA_HOME"
+          echo "BOOTJDK=$BOOTJDK"
+          "$BOOTJDK/javac" -version
+          "$JAVA_HOME/bin/java" -version
 
-          gmake -j"$BUILD_JOBS" dsym package \
-            PLATFORM=2 \
-            RUNNER=0 \
-            SDKPATH="$SDKPATH" \
-            IOS_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET" \
-            TROLLSTORE_JIT_ENT=1 \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            2>&1 | tee build-trollstore.log
+          gmake -j$(sysctl -n hw.ncpu) dsym package PLATFORM=2 $SIGN_FLAGS 2> >(grep -v "vtool warning: code signature will be invalid" >&2)
+
+          gmake -j$(sysctl -n hw.ncpu) dsym package PLATFORM=2 TROLLSTORE_JIT_ENT=1 $SIGN_FLAGS 2> >(grep -v "vtool warning: code signature will be invalid" >&2)
 
       - name: List artifacts
         if: always()
         run: ls -la artifacts/ || true
 
-      - name: Upload build logs
+      - name: Upload TrollStore tIPA (full)
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: org.angelauramc.amethyst-ios-trollstore
+          path: artifacts/org.angelauramc.amethyst-*-ios-trollstore.tipa
+          retention-days: 30
+          if-no-files-found: warn
+          compression-level: 0
+
+      - name: Upload TrollStore tIPA (slimmed)
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: org.angelauramc.amethyst-ios-trollstore-slimmed
+          path: artifacts/org.angelauramc.amethyst.slimmed-*-ios-trollstore.tipa
+          retention-days: 30
+          if-no-files-found: warn
+          compression-level: 0
+
+      - name: Upload regular IPA (full)
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: org.angelauramc.amethyst-ios
+          path: artifacts/org.angelauramc.amethyst-*-ios.ipa
+          retention-days: 30
+          if-no-files-found: warn
+          compression-level: 0
+
+      - name: Upload regular IPA (slimmed)
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: org.angelauramc.amethyst-ios-slimmed
+          path: artifacts/org.angelauramc.amethyst.slimmed-*-ios.ipa
+          retention-days: 30
+          if-no-files-found: warn
+          compression-level: 0
+
+      - name: Upload AngelAuraAmethyst.dSYM
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: AngelAuraAmethyst.dSYM
+          path: artifacts/AngelAuraAmethyst.dSYM
+          retention-days: 14
+          if-no-files-found: warn
+          compression-level: 0
+
+      - name: Upload build logs on failure
         if: failure()
         uses: actions/upload-artifact@v5
         with:
           name: build-logs
           path: |
-            build-jre.log
-            build-normal.log
-            build-trollstore.log
             Natives/build/CMakeFiles/CMakeOutput.log
             Natives/build/CMakeFiles/CMakeError.log
           if-no-files-found: ignore
