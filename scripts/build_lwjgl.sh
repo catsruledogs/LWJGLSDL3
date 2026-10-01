@@ -91,6 +91,7 @@ build_version() {
     # skipped and the kotlin/template toolchain is never downloaded.
     # (Feed 'y' via process substitution so `set -o pipefail` never sees
     # the SIGPIPE death of `yes` as a failure.)
+    unset LWJGL_BUILD_OFFLINE
     ant init < <(yes)
 
     # Force the Maven dependency download pass. On 3.4.x this fetches
