@@ -3,13 +3,62 @@ project(AngelAuraAmethyst)
 
 configure_file(${CMAKE_CURRENT_LIST_DIR}/config.h.in ${CMAKE_CURRENT_LIST_DIR}/config.h)
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -target arm64-apple-ios -mcpu=apple-a8 -fcommon -fobjc-arc -ObjC -Wno-error=implicit-function-declaration -F'${CMAKE_OSX_SYSROOT}/System/Cryptexes/OS/System/Library/Frameworks' -mios-version-min=16.0")
+# iOS deployment target.
+# Keep this at 14.0. The SDK version may be newer, but all application
+# binaries must advertise iOS 14.0 as their minimum supported version.
+set(IOS_DEPLOYMENT_TARGET "14.0")
+set(CMAKE_OSX_DEPLOYMENT_TARGET "${IOS_DEPLOYMENT_TARGET}" CACHE STRING
+    "Minimum supported iOS version" FORCE)
+
+set(IOS_SYSROOT_FLAG "")
+if(CMAKE_OSX_SYSROOT)
+  set(IOS_SYSROOT_FLAG
+      "-F${CMAKE_OSX_SYSROOT}/System/Cryptexes/OS/System/Library/Frameworks")
+endif()
+
+set(IOS_COMMON_C_FLAGS
+    "-target arm64-apple-ios"
+    "-mcpu=apple-a8"
+    "-fcommon"
+    "-fobjc-arc"
+    "-ObjC"
+    "-Wno-error=implicit-function-declaration"
+    "-mios-version-min=${IOS_DEPLOYMENT_TARGET}"
+    "${IOS_SYSROOT_FLAG}")
+
+string(REPLACE ";" " " IOS_COMMON_C_FLAGS "${IOS_COMMON_C_FLAGS}")
+
+set(CMAKE_C_FLAGS
+    "${CMAKE_C_FLAGS} ${IOS_COMMON_C_FLAGS}")
+set(CMAKE_CXX_FLAGS
+    "${CMAKE_CXX_FLAGS} ${IOS_COMMON_C_FLAGS}")
+set(CMAKE_OBJC_FLAGS
+    "${CMAKE_OBJC_FLAGS} ${IOS_COMMON_C_FLAGS}")
+set(CMAKE_OBJCXX_FLAGS
+    "${CMAKE_OBJCXX_FLAGS} ${IOS_COMMON_C_FLAGS}")
+
 set(CMAKE_C_FLAGS_DEBUG "-funwind-tables -g")
 
+# CMake 3.6 does not provide add_link_options(), so apply the deployment
+# target through the global linker flags.
+set(IOS_DEPLOYMENT_LINK_FLAGS
+    "-mios_version_min ${IOS_DEPLOYMENT_TARGET}")
+
+set(CMAKE_EXE_LINKER_FLAGS
+    "${CMAKE_EXE_LINKER_FLAGS} ${IOS_DEPLOYMENT_LINK_FLAGS}")
+
+set(CMAKE_SHARED_LINKER_FLAGS
+    "${CMAKE_SHARED_LINKER_FLAGS} ${IOS_DEPLOYMENT_LINK_FLAGS}")
+
 if("${CMAKE_HOST_SYSTEM_NAME}" MATCHES "Linux|^GNU$|Android")
-set(GLOBAL_LDFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} -Wl,-syslibroot,${CMAKE_OSX_SYSROOT} -fuse-ld=lld")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${GLOBAL_LDFLAGS}")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${GLOBAL_LDFLAGS}")
+  set(GLOBAL_LDFLAGS
+      "-isysroot ${CMAKE_OSX_SYSROOT} -Wl,-syslibroot,${CMAKE_OSX_SYSROOT} -fuse-ld=lld")
+
+  set(CMAKE_EXE_LINKER_FLAGS
+      "${CMAKE_EXE_LINKER_FLAGS} ${GLOBAL_LDFLAGS}")
+
+  set(CMAKE_SHARED_LINKER_FLAGS
+      "${CMAKE_SHARED_LINKER_FLAGS} ${GLOBAL_LDFLAGS}")
 endif()
 
 include_directories(
@@ -30,33 +79,49 @@ include_directories(
 )
 
 # For cacio support library
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -rpath @loader_path -rpath @executable_path/java_runtimes/java-8-openjdk/lib -rpath /usr/lib/jvm/java-8-openjdk/lib")
+set(CMAKE_SHARED_LINKER_FLAGS
+    "${CMAKE_SHARED_LINKER_FLAGS}
+     -rpath @loader_path
+     -rpath @executable_path/java_runtimes/java-8-openjdk/lib
+     -rpath /usr/lib/jvm/java-8-openjdk/lib")
 
 # EXT: stub library, delete after compile awt_xawt
 add_library(awt_headless SHARED
   awt_xawt/empty.m
 )
+
 target_link_libraries(awt_headless)
 
 # EXT: cacio support library
 add_library(awt_xawt SHARED
   awt_xawt/xawt_fake.m
 )
+
 target_link_libraries(awt_xawt
   "-L'${CMAKE_CURRENT_LIST_DIR}/build'"
   awt_headless
 )
 
-set(CMAKE_FRAMEWORK_PATH "${CMAKE_CURRENT_LIST_DIR}/resources/Frameworks")
+set(CMAKE_FRAMEWORK_PATH
+    "${CMAKE_CURRENT_LIST_DIR}/resources/Frameworks")
 
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -rpath @executable_path/Frameworks -rpath @loader_path/Frameworks -Wl,-undefined,dynamic_lookup")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -rpath @executable_path/Frameworks -rpath @loader_path/Frameworks")
+set(CMAKE_EXE_LINKER_FLAGS
+    "${CMAKE_EXE_LINKER_FLAGS}
+     -rpath @executable_path/Frameworks
+     -rpath @loader_path/Frameworks
+     -Wl,-undefined,dynamic_lookup")
+
+set(CMAKE_SHARED_LINKER_FLAGS
+    "${CMAKE_SHARED_LINKER_FLAGS}
+     -rpath @executable_path/Frameworks
+     -rpath @loader_path/Frameworks")
 
 # ANGLE wrapper for 1.17+
 add_library(tinygl4angle SHARED
   external/gl4es/string_utils.c
   external/gl4es/tinygl4angle.c
 )
+
 target_link_libraries(tinygl4angle
   "${GLOBAL_LDFLAGS}"
   "-F'${CMAKE_CURRENT_LIST_DIR}/resources/Frameworks'"
@@ -65,7 +130,9 @@ target_link_libraries(tinygl4angle
 )
 
 # LTW (Large Thin Wrapper) - OpenGL core-to-ES wrapper
-set(LTW_DIR "${CMAKE_CURRENT_LIST_DIR}/external/LTW/ltw/src/main/tinywrapper")
+set(LTW_DIR
+    "${CMAKE_CURRENT_LIST_DIR}/external/LTW/ltw/src/main/tinywrapper")
+
 set(LTW_INCLUDES
   "${LTW_DIR}"
   "${LTW_DIR}/GL"
@@ -79,24 +146,46 @@ set(LTW_INCLUDES
 
 include(cmake/ltw_sources.cmake)
 
-add_library(glsl_optimizer STATIC ${GLSL_OPTIMIZER_SRC})
-target_include_directories(glsl_optimizer PRIVATE ${LTW_INCLUDES})
+add_library(glsl_optimizer STATIC
+  ${GLSL_OPTIMIZER_SRC}
+)
+
+target_include_directories(glsl_optimizer PRIVATE
+  ${LTW_INCLUDES}
+)
+
 set_target_properties(glsl_optimizer PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   CXX_STANDARD 17
   C_STANDARD 11
 )
+
 target_compile_definitions(glsl_optimizer PRIVATE
-  _LIB NOMINMAX _USE_MATH_DEFINES __STDC_NO_THREADS__
-  __STDC_LIMIT_MACROS __STDC_FORMAT_MACROS __STDC_CONSTANT_MACROS
-  UTL_ARCH_LITTLE_ENDIAN UNIX
-  HAVE_OPENGL HAVE_OPENGL_ES_1 HAVE_OPENGL_ES_2
-  HAVE_TIMESPEC_GET HAVE_STRUCT_TIMESPEC
+  _LIB
+  NOMINMAX
+  _USE_MATH_DEFINES
+  __STDC_NO_THREADS__
+  __STDC_LIMIT_MACROS
+  __STDC_FORMAT_MACROS
+  __STDC_CONSTANT_MACROS
+  UTL_ARCH_LITTLE_ENDIAN
+  UNIX
+  HAVE_OPENGL
+  HAVE_OPENGL_ES_1
+  HAVE_OPENGL_ES_2
+  HAVE_TIMESPEC_GET
+  HAVE_STRUCT_TIMESPEC
   VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK=VK_DESCRIPTOR_TYPE_INLINE_UNIFORM_BLOCK_EXT
 )
 
-add_library(ltw SHARED ${LTW_CORE_SRC})
-target_include_directories(ltw PRIVATE ${LTW_INCLUDES})
+add_library(ltw SHARED
+  ${LTW_CORE_SRC}
+)
+
+target_include_directories(ltw PRIVATE
+  ${LTW_INCLUDES}
+)
+
 target_link_libraries(ltw
   "${GLOBAL_LDFLAGS}"
   glsl_optimizer
@@ -104,15 +193,25 @@ target_link_libraries(ltw
   "-framework libEGL"
   "-framework libGLESv2"
 )
+
 set_target_properties(ltw PROPERTIES
   C_STANDARD 11
   C_STANDARD_REQUIRED ON
 )
+
 target_compile_definitions(ltw PRIVATE
-  _LIB NOMINMAX _USE_MATH_DEFINES __STDC_NO_THREADS__
-  __STDC_LIMIT_MACROS __STDC_FORMAT_MACROS __STDC_CONSTANT_MACROS
-  UTL_ARCH_LITTLE_ENDIAN UNIX
-  HAVE_OPENGL HAVE_OPENGL_ES_1 HAVE_OPENGL_ES_2
+  _LIB
+  NOMINMAX
+  _USE_MATH_DEFINES
+  __STDC_NO_THREADS__
+  __STDC_LIMIT_MACROS
+  __STDC_FORMAT_MACROS
+  __STDC_CONSTANT_MACROS
+  UTL_ARCH_LITTLE_ENDIAN
+  UNIX
+  HAVE_OPENGL
+  HAVE_OPENGL_ES_1
+  HAVE_OPENGL_ES_2
 )
 
 # AFNetworking
@@ -129,6 +228,7 @@ add_library(AFNetworking SHARED
   external/AFNetworking/UIKit+AFNetworking/UIButton+AFNetworking.m
   external/AFNetworking/UIKit+AFNetworking/UIImageView+AFNetworking.m
 )
+
 target_link_libraries(AFNetworking
   "-framework CoreGraphics"
   "-framework CoreServices"
@@ -141,12 +241,14 @@ target_link_libraries(AFNetworking
 add_library(AmethystAccountJNI SHARED
   authenticator/MinecraftAccountJNI.m
 )
+
 target_link_libraries(AmethystAccountJNI)
 
 # Audio capture JNI bridge
 add_library(audio_capture SHARED
   audio_capture_bridge.m
 )
+
 target_link_libraries(audio_capture
   "-framework AVFoundation"
 )
@@ -170,7 +272,7 @@ add_executable(AngelAuraAmethyst
   ctxbridges/vk_bridge.m
 
   debug/DebugServer.m
- 
+
   customcontrols/ControlButton.m
   customcontrols/ControlDrawer.m
   customcontrols/ControlJoystick.m
@@ -232,19 +334,22 @@ add_executable(AngelAuraAmethyst
   SurfaceViewController+LogView.m
   SurfaceViewController+Navigation.m
   TrackedTextField.m
-   egl_bridge.m
-   ZinkConfig.m
-   input_bridge_v3.m
+  egl_bridge.m
+  ZinkConfig.m
+  input_bridge_v3.m
   ios_uikit_bridge.m
   utils.m
 )
 
 if("${CMAKE_HOST_SYSTEM_NAME}" MATCHES "Linux|^GNU$|Android")
-target_sources(AngelAuraAmethyst PUBLIC non_darwin_utils.m)
+  target_sources(AngelAuraAmethyst PUBLIC
+    non_darwin_utils.m
+  )
 endif()
 
 target_link_libraries(AngelAuraAmethyst
-  PUBLIC AFNetworking
+  PUBLIC
+  AFNetworking
   lzma
   "-F'${CMAKE_CURRENT_LIST_DIR}/build'"
   "-F'${CMAKE_CURRENT_LIST_DIR}/resources/Frameworks'"
@@ -266,7 +371,10 @@ target_link_libraries(AngelAuraAmethyst
   "-framework WebKit"
   "-weak_framework SafariServices"
 )
+
 set_target_properties(AngelAuraAmethyst PROPERTIES
   MACOSX_BUNDLE TRUE
   MACOSX_FRAMEWORK_IDENTIFIER org.cmake.ExecutableTarget
-  MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_LIST_DIR}/Info.plist")
+  MACOSX_BUNDLE_INFO_PLIST
+    "${CMAKE_CURRENT_LIST_DIR}/Info.plist"
+)
