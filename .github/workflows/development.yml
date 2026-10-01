@@ -122,6 +122,7 @@ jobs:
           SIGN_FLAGS="CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="
 
           mkdir -p lwjgl-lib/3.3.3-lwgjl/modules/lwjgl/lwjglx/src/generated/java
+          mkdir -p lwjgl-lib/3.4.1-lwgjl/modules/lwjgl/lwjglx/src/generated/java
 
           gmake -j$(sysctl -n hw.ncpu) dsym package PLATFORM=2 $SIGN_FLAGS 2> >(grep -v "vtool warning: code signature will be invalid" >&2)
           
