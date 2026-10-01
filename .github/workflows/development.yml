@@ -45,13 +45,6 @@ jobs:
           sudo mkdir -p /usr/local/bin
           sudo ln -sf /opt/homebrew/bin/gmake /usr/local/bin/gmake
 
-      - name: Cache iOS JREs
-        id: cache-jres
-        uses: actions/cache@v5
-        with:
-          path: depends/
-          key: amethyst-jres-v2
-
       - name: Resolve env
         run: |
           echo "SDKPATH=$(xcrun --sdk iphoneos --show-sdk-path)" >> $GITHUB_ENV
