@@ -111,7 +111,7 @@ jobs:
 
           export PATH="$JDK25_PATH/bin:$JDK8_PATH/bin:/opt/homebrew/bin:$PATH"
           export JAVA_HOME="$JDK25_PATH"
-          export BOOTJDK="$JDK8_PATH/bin"
+          export BOOTJDK="$JDK8_PATH"
 
           export SLIMMED=1
 
